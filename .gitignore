@@ -17,3 +17,7 @@ node_modules/
 .pytest_cache/
 
 scratch.py
+
+#Output files
+
+data/*.json
