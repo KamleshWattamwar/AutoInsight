@@ -12,3 +12,8 @@ __pycache__/
 
 # Frontend dependencies
 node_modules/
+
+# Pytest cache
+.pytest_cache/
+
+scratch.py
