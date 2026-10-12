@@ -1,4 +1,5 @@
 """Deterministic statistics for the dataset."""
+from scipy import stats
 import numpy as np
 import pandas as pd
 
@@ -26,4 +27,21 @@ def overview(df: pd.DataFrame, types: dict) -> dict:
         },
         "constant_columns": [c for c in df.columns if df[c].nunique(dropna=True) <= 1],
         "column_types": types,
+    }
+
+def numeric_stats(s: pd.Series) -> dict:
+    s = s.dropna()
+    if s.empty:
+        return {}
+    q1, q3 = s.quantile([0.25, 0.75])
+    return {
+        "mean": _f(s.mean()),
+        "median": _f(s.median()),
+        "std": _f(s.std()),
+        "min": _f(s.min()),
+        "max": _f(s.max()),
+        "q1": _f(q1),
+        "q3": _f(q3),
+        "skewness": _f(stats.skew(s)) if len(s) > 2 else None,
+        "kurtosis": _f(stats.kurtosis(s)) if len(s) > 3 else None,
     }
