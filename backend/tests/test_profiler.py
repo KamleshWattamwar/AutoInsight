@@ -1,5 +1,5 @@
 import pandas as pd
-from app.services.profiler import overview
+from app.services.profiler import categorical_stats, overview
 from app.services.profiler import overview, numeric_stats
 
 def test_missing_pct():
@@ -40,3 +40,22 @@ def test_numeric_all_nan():
 
 def test_numeric_two_values():
     assert numeric_stats(pd.Series([1.0, 2.0]))["skewness"] is None
+
+
+def test_categorical_top():
+    r = categorical_stats(pd.Series(["a", "a", "a", "b"]))
+    assert r["top"][0] == {"value": "a", "pct": 75.0}
+
+
+def test_categorical_rare():
+    s = pd.Series(["a"] * 199 + ["b"])
+    assert categorical_stats(s)["rare_categories"] == 1
+
+
+def test_categorical_all_nan():
+    assert categorical_stats(pd.Series([None, None])) == {}
+
+
+def test_categorical_top_limit():
+    s = pd.Series(list("aabbccdd"))
+    assert len(categorical_stats(s, top=2)["top"]) == 2

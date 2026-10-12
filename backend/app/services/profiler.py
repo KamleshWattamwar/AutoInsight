@@ -45,3 +45,14 @@ def numeric_stats(s: pd.Series) -> dict:
         "skewness": _f(stats.skew(s)) if len(s) > 2 else None,
         "kurtosis": _f(stats.kurtosis(s)) if len(s) > 3 else None,
     }
+
+def categorical_stats(s: pd.Series, top: int = 5) -> dict:
+    s = s.dropna()
+    if s.empty:
+        return {}
+    freq = s.value_counts(normalize=True)
+    return {
+        "unique": int(s.nunique()),
+        "top": [{"value": str(k), "pct": _f(v * 100, 2)} for k, v in freq.head(top).items()],
+        "rare_categories": int((freq < 0.01).sum()),
+    }
