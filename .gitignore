@@ -21,3 +21,5 @@ scratch.py
 #Output files
 
 data/*.json
+
+backend/uploads/
