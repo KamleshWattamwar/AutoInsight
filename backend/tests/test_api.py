@@ -33,7 +33,7 @@ def test_upload_then_analyze(client):
     r = client.post(f"/datasets/{body['dataset_id']}/analyze")
     assert r.status_code == 200
     assert set(r.json()) == {
-        "overview", "columns", "correlations", "findings", "quality_score"
+        "overview", "columns", "correlations", "findings", "quality_score" ,"warnings"
     }
 
 

@@ -83,4 +83,4 @@ def test_correlation_perfect():
 
 def test_correlation_skips_constant():
     df = pd.DataFrame({"a": range(10), "b": [5] * 10})
-    assert correlations(df, ["a", "b"]) == {"pairs": [], "matrix": {}}
+    assert correlations(df, ["a", "b"]) == {"pairs": [], "matrix": {}, "skipped_columns": []}

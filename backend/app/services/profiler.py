@@ -71,9 +71,11 @@ def iqr_outliers(s: pd.Series) -> dict:
 
 
 def correlations(df: pd.DataFrame, numeric_cols: list, min_abs: float = 0.3) -> dict:
-    cols = [c for c in numeric_cols if df[c].nunique() > 1][:MAX_CORR_COLS]
+    eligible = [c for c in numeric_cols if df[c].nunique() > 1]
+    cols = eligible[:MAX_CORR_COLS]
+    skipped = eligible[MAX_CORR_COLS:]
     if len(cols) < 2:
-        return {"pairs": [], "matrix": {}}
+        return {"pairs": [], "matrix": {}, "skipped_columns": skipped}
 
     matrix = df[cols].corr(method="pearson")
     pairs = []
@@ -91,4 +93,5 @@ def correlations(df: pd.DataFrame, numeric_cols: list, min_abs: float = 0.3) -> 
     return {
         "pairs": pairs,
         "matrix": {a: {b: _f(matrix.loc[a, b], 3) for b in cols} for a in cols},
+        "skipped_columns": skipped,
     }

@@ -24,14 +24,23 @@ def analyze_df(df) -> dict:
     numeric_cols = [c for c, k in types.items() if k == "numeric"]
     corr = correlations(df, numeric_cols)
 
+    warnings = []
+    skipped = corr["skipped_columns"]
+    if skipped:
+        used = len(corr["matrix"])
+        warnings.append(
+            f"Correlations used {used} of {used + len(skipped)} numeric columns; "
+            f"{len(skipped)} were skipped"
+        )
+
     return {
         "overview": ov,
         "columns": columns,
         "correlations": corr,
         "findings": detect(ov, columns, corr),
         "quality_score": quality_score(ov, columns),
+        "warnings": warnings,
     }
-
 
 def analyze_csv(path: str) -> dict:
     return analyze_df(load_csv(path))
