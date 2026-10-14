@@ -29,13 +29,34 @@ def test_upload_rejects_bad_files(client, name, content):
 def test_upload_then_analyze(client):
     body = upload(client).json()
     assert (body["rows"], body["columns"]) == (4, 2)
+    dataset_id = body["dataset_id"]
 
-    r = client.post(f"/datasets/{body['dataset_id']}/analyze")
+    assert client.post(f"/datasets/{dataset_id}/analyze").status_code == 202
+    assert client.get(f"/datasets/{dataset_id}/status").json()["status"] == "done"
+
+    r = client.get(f"/datasets/{dataset_id}/result")
     assert r.status_code == 200
     assert set(r.json()) == {
-        "overview", "columns", "correlations", "findings", "quality_score" ,"warnings"
+        "overview", "columns", "correlations", "findings", "quality_score", "warnings"
     }
 
+
+def test_status_and_result_before_analyze(client):
+    dataset_id = upload(client).json()["dataset_id"]
+    assert client.get(f"/datasets/{dataset_id}/status").json()["status"] == "not_started"
+    assert client.get(f"/datasets/{dataset_id}/result").status_code == 409
+
+
+def test_failed_job(client, monkeypatch):
+    def boom(path):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "analyze_csv", boom)
+    dataset_id = upload(client).json()["dataset_id"]
+    client.post(f"/datasets/{dataset_id}/analyze")
+
+    status = client.get(f"/datasets/{dataset_id}/status").json()
+    assert status["status"] == "failed" and "boom" in status["error"]
 
 @pytest.mark.parametrize("dataset_id, status", [("not-a-uuid", 400), (UNKNOWN_ID, 404)])
 def test_analyze_errors(client, dataset_id, status):
