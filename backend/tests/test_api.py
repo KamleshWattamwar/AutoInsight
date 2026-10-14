@@ -61,3 +61,12 @@ def test_failed_job(client, monkeypatch):
 @pytest.mark.parametrize("dataset_id, status", [("not-a-uuid", 400), (UNKNOWN_ID, 404)])
 def test_analyze_errors(client, dataset_id, status):
     assert client.post(f"/datasets/{dataset_id}/analyze").status_code == status
+
+def test_cors_allows_frontend_origin(client):
+    r = client.get("/health", headers={"Origin": "http://localhost:5173"})
+    assert r.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_blocks_unknown_origin(client):
+    r = client.get("/health", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in r.headers
