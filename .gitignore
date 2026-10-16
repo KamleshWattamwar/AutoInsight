@@ -23,3 +23,6 @@ scratch.py
 data/*.json
 
 backend/uploads/
+
+#database files
+*.db
