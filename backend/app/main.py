@@ -40,17 +40,27 @@ UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 
-# Temporary: status and result still read this until step 5.
-JOBS: dict[str, dict] = {}
+
+def _check_uuid(value: str, what: str) -> None:
+    if not UUID_RE.match(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {what} id")
 
 
 def _dataset_path(dataset_id: str) -> Path:
-    if not UUID_RE.match(dataset_id):
-        raise HTTPException(status_code=400, detail="Invalid dataset id")
+    _check_uuid(dataset_id, "dataset")
     path = UPLOAD_DIR / f"{dataset_id}.csv"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
     return path
+
+
+def _latest_report(session: Session, dataset_id: str) -> models.Report | None:
+    return session.scalars(
+        select(models.Report)
+        .where(models.Report.dataset_id == dataset_id)
+        .order_by(models.Report.created_at.desc())
+        .limit(1)
+    ).first()
 
 
 def _run_analysis(report_id: str, path: Path) -> None:
@@ -66,11 +76,11 @@ def _run_analysis(report_id: str, path: Path) -> None:
         report.finished_at = datetime.now(timezone.utc)
         session.commit()
     except Exception:
-        logger.exception("Analysis failed for report %s", report_id)  # full traceback in server log only
+        logger.exception("Analysis failed for report %s", report_id)
         session.rollback()
         report = session.get(models.Report, report_id)
         report.status = "failed"
-        report.error = "Analysis failed"  # generic message, no internals leaked (fixes N3)
+        report.error = "Analysis failed"
         report.finished_at = datetime.now(timezone.utc)
         session.commit()
     finally:
@@ -112,11 +122,10 @@ async def upload_dataset(
         path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Row is added only after validation, so rejected files leave no DB record.
     session.add(
         models.Dataset(
             id=dataset_id,
-            original_filename=(file.filename or "")[:255],  # metadata only, never a path
+            original_filename=(file.filename or "")[:255],
             stored_path=str(path),
             rows=len(df),
             columns=len(df.columns),
@@ -135,7 +144,6 @@ def analyze_dataset(
 ):
     path = _dataset_path(dataset_id)
 
-    # Duplicate-run guard, now a DB query instead of the JOBS dict.
     active = session.scalars(
         select(models.Report).where(
             models.Report.dataset_id == dataset_id,
@@ -149,22 +157,41 @@ def analyze_dataset(
     session.add(report)
     session.commit()
 
-    # Pass the id, never the session.
     background_tasks.add_task(_run_analysis, report.id, path)
     return {"dataset_id": dataset_id, "report_id": report.id, "status": "pending"}
 
 
 @app.get("/datasets/{dataset_id}/status")
-def analysis_status(dataset_id: str):
+def analysis_status(dataset_id: str, session: Session = Depends(db.get_db)):
     _dataset_path(dataset_id)
-    job = JOBS.get(dataset_id, {"status": "not_started"})
-    return {"dataset_id": dataset_id, "status": job["status"], "error": job.get("error")}
+    report = _latest_report(session, dataset_id)
+    if report is None:
+        return {"dataset_id": dataset_id, "status": "not_started", "error": None}
+    return {"dataset_id": dataset_id, "status": report.status, "error": report.error}
 
 
 @app.get("/datasets/{dataset_id}/result")
-def analysis_result(dataset_id: str):
+def analysis_result(dataset_id: str, session: Session = Depends(db.get_db)):
     _dataset_path(dataset_id)
-    job = JOBS.get(dataset_id, {"status": "not_started"})
-    if job["status"] != "done":
-        raise HTTPException(status_code=409, detail=f"Analysis is {job['status']}")
-    return job["result"]
+    report = _latest_report(session, dataset_id)
+    status = report.status if report else "not_started"
+    if status != "done":
+        raise HTTPException(status_code=409, detail=f"Analysis is {status}")
+    return report.result
+
+
+@app.get("/reports/{report_id}")
+def get_report(report_id: str, session: Session = Depends(db.get_db)):
+    _check_uuid(report_id, "report")
+    report = session.get(models.Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {
+        "report_id": report.id,
+        "dataset_id": report.dataset_id,
+        "status": report.status,
+        "error": report.error,
+        "created_at": report.created_at,
+        "finished_at": report.finished_at,
+        "result": report.result if report.status == "done" else None,
+    }
