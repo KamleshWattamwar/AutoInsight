@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -195,3 +195,44 @@ def get_report(report_id: str, session: Session = Depends(db.get_db)):
         "finished_at": report.finished_at,
         "result": report.result if report.status == "done" else None,
     }
+
+@app.get("/datasets")
+def list_datasets(
+    limit: int = Query(50, ge=1, le=200), session: Session = Depends(db.get_db)
+):
+    rows = session.scalars(
+        select(models.Dataset).order_by(models.Dataset.created_at.desc()).limit(limit)
+    ).all()
+    return [
+        {
+            "dataset_id": d.id,
+            "original_filename": d.original_filename,
+            "rows": d.rows,
+            "columns": d.columns,
+            "created_at": d.created_at,
+        }
+        for d in rows
+    ]
+
+
+@app.get("/reports")
+def list_reports(
+    dataset_id: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    session: Session = Depends(db.get_db),
+):
+    query = select(models.Report).order_by(models.Report.created_at.desc()).limit(limit)
+    if dataset_id is not None:
+        _check_uuid(dataset_id, "dataset")
+        query = query.where(models.Report.dataset_id == dataset_id)
+    return [
+        {
+            "report_id": r.id,
+            "dataset_id": r.dataset_id,
+            "status": r.status,
+            "error": r.error,
+            "created_at": r.created_at,
+            "finished_at": r.finished_at,
+        }
+        for r in session.scalars(query).all()
+    ]
