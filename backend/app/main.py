@@ -1,14 +1,29 @@
+import logging
 import re
 import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from app import db, models
 from app.services.analyzer import analyze_csv
 from app.services.loader import load_csv
 
-app = FastAPI(title="AutoInsight API", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.Base.metadata.create_all(db.engine)  # creates missing tables at startup
+    yield
+
+
+app = FastAPI(title="AutoInsight API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,8 +40,7 @@ UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 
-# In-memory job store: {dataset_id: {"status", "result"?, "error"?}}.
-
+# Temporary: status and result still read this until step 5.
 JOBS: dict[str, dict] = {}
 
 
@@ -39,12 +53,28 @@ def _dataset_path(dataset_id: str) -> Path:
     return path
 
 
-def _run_analysis(dataset_id: str, path: Path) -> None:
-    JOBS[dataset_id] = {"status": "running"}
+def _run_analysis(report_id: str, path: Path) -> None:
+    # Own session: the request's session is closed once the response is sent.
+    session = db.SessionLocal()
     try:
-        JOBS[dataset_id] = {"status": "done", "result": analyze_csv(path)}
-    except Exception as e:
-        JOBS[dataset_id] = {"status": "failed", "error": str(e)}
+        report = session.get(models.Report, report_id)
+        report.status = "running"
+        session.commit()
+
+        report.result = analyze_csv(path)  # whole new dict, never edited in place
+        report.status = "done"
+        report.finished_at = datetime.now(timezone.utc)
+        session.commit()
+    except Exception:
+        logger.exception("Analysis failed for report %s", report_id)  # full traceback in server log only
+        session.rollback()
+        report = session.get(models.Report, report_id)
+        report.status = "failed"
+        report.error = "Analysis failed"  # generic message, no internals leaked (fixes N3)
+        report.finished_at = datetime.now(timezone.utc)
+        session.commit()
+    finally:
+        session.close()
 
 
 @app.get("/health")
@@ -53,7 +83,9 @@ def health():
 
 
 @app.post("/datasets/upload")
-async def upload_dataset(file: UploadFile = File(...)):
+async def upload_dataset(
+    file: UploadFile = File(...), session: Session = Depends(db.get_db)
+):
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only .csv files are allowed")
 
@@ -80,16 +112,46 @@ async def upload_dataset(file: UploadFile = File(...)):
         path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Row is added only after validation, so rejected files leave no DB record.
+    session.add(
+        models.Dataset(
+            id=dataset_id,
+            original_filename=(file.filename or "")[:255],  # metadata only, never a path
+            stored_path=str(path),
+            rows=len(df),
+            columns=len(df.columns),
+        )
+    )
+    session.commit()
+
     return {"dataset_id": dataset_id, "rows": len(df), "columns": len(df.columns)}
 
 
 @app.post("/datasets/{dataset_id}/analyze", status_code=202)
-def analyze_dataset(dataset_id: str, background_tasks: BackgroundTasks):
+def analyze_dataset(
+    dataset_id: str,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(db.get_db),
+):
     path = _dataset_path(dataset_id)
-    if JOBS.get(dataset_id, {}).get("status") not in ("pending", "running"):
-        JOBS[dataset_id] = {"status": "pending"}
-        background_tasks.add_task(_run_analysis, dataset_id, path)
-    return {"dataset_id": dataset_id, "status": JOBS[dataset_id]["status"]}
+
+    # Duplicate-run guard, now a DB query instead of the JOBS dict.
+    active = session.scalars(
+        select(models.Report).where(
+            models.Report.dataset_id == dataset_id,
+            models.Report.status.in_(("pending", "running")),
+        )
+    ).first()
+    if active:
+        return {"dataset_id": dataset_id, "report_id": active.id, "status": active.status}
+
+    report = models.Report(id=str(uuid.uuid4()), dataset_id=dataset_id, status="pending")
+    session.add(report)
+    session.commit()
+
+    # Pass the id, never the session.
+    background_tasks.add_task(_run_analysis, report.id, path)
+    return {"dataset_id": dataset_id, "report_id": report.id, "status": "pending"}
 
 
 @app.get("/datasets/{dataset_id}/status")
