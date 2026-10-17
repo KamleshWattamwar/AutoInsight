@@ -1,161 +1,139 @@
-# AutoInsight 📊
-**Automated EDA-to-Insight Report Generator**
+# AutoInsight
 
-Transform raw CSV data into analyst-style reports. AutoInsight automatically profiles datasets, detects statistical patterns via a deterministic rule engine, and generates plain-English insights—powered by an LLM but grounded in verified numbers.
+**Automated EDA-to-insight report generator.** Upload a CSV and get an analyst-style report: data profile, detected problems and patterns, and a data quality score.
 
-## Why This Matters
-Most data analysis tools either:
-- Generate arbitrary charts without insight (dashboards)
-- Let LLMs hallucinate statistics from raw data (unreliable)
+**Design rule:** the engine computes every number. A planned LLM layer will only narrate verified findings, so the report cannot invent statistics.
 
-AutoInsight does this:
 ```
-CSV → Pandas Stats → Rule-Based Finder → LLM Translation → Analyst Report
+CSV -> Pandas/SciPy profile -> rule-based findings -> quality score -> (planned) LLM narrative
 ```
-The LLM only narrates; the math is bulletproof.
 
----
+## Status
 
-## ✨ Core Features
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 1 | Deterministic EDA engine (profiling, outliers, correlations, findings, score) | Done |
+| 2 | FastAPI layer: safe upload, background analysis, status polling | Done |
+| 3 | PostgreSQL persistence: datasets and report history | Done |
+| 4 | LLM narrative layer (validated against the findings) | Planned |
+| 5 | Chart endpoints (aggregated data only) | Planned |
+| 6 | React dashboard | Planned |
+| 7 | Deployment | Planned |
 
-| Feature | What It Does |
-|---------|-------------|
-| **Data Profiling** | Detects types, nulls, duplicates, descriptive stats automatically |
-| **Outlier Detection** | IQR-based anomaly flagging with severity scoring |
-| **Correlation Analysis** | Pearson/Spearman correlations without false causation claims |
-| **Rule-Based Insights** | High missingness, skewed distributions, strong relationships → deterministic flags |
-| **LLM Narratives** | Structured findings → clear executive summaries + recommendations |
-| **Visual Exploration** | User-selectable charts (histogram, scatter, bar, box plot) |
-| **Report History** | Save & retrieve past analyses from PostgreSQL |
+## Features (built)
 
----
+- **Type detection:** numeric, categorical, boolean, datetime, text, identifier, empty.
+- **Profiling:** missing values, duplicates, constant columns, descriptive stats.
+- **Outliers:** IQR method with bounds and counts.
+- **Correlations:** Pearson and Spearman with p-values. Findings use the stronger of the two and never claim causation.
+- **Rule-based findings:** missing data, skew, outliers, dominant category, high cardinality, correlation. Sorted by severity.
+- **Quality score:** 0 to 100, from a documented capped-penalty formula.
+- **API:** CSV upload with a 50 MB cap and UUID file names, analysis as a background job, status polling.
+- **Persistence:** datasets and reports stored in PostgreSQL. Re-analysis keeps the report history.
 
-## 🛠 Tech Stack
+## Tech stack
 
-**Frontend:** React, Vite, Tailwind CSS, Recharts  
-**Backend:** FastAPI, Pydantic, Python  
-**Data:** Pandas, NumPy, SciPy  
-**Database:** PostgreSQL, SQLAlchemy  
-**AI:** OpenAI API  
-**Deployment:** Docker, Docker Compose
+| Layer | Choice |
+|-------|--------|
+| Engine | Python, Pandas, NumPy, SciPy |
+| API | FastAPI, uvicorn |
+| Database | PostgreSQL, SQLAlchemy 2.0, psycopg |
+| Tests | pytest, FastAPI TestClient |
+| Planned | LLM API (provider undecided), React, Recharts |
 
----
+## Running (PostgreSQL)
 
-## 🚀 Quick Start
+Requirements: Python 3.10+ and PostgreSQL.
 
-### Prerequisites
-- Python 3.10+
-- Node.js 16+
-- PostgreSQL (or run via Docker)
+1. Create the database user and databases:
 
-### Run Locally
+```sql
+create user autoinsight with password 'autoinsight';
+create database autoinsight owner autoinsight;
+create database autoinsight_test owner autoinsight;
+```
 
-1. **Clone & setup:**
-   ```bash
-   git clone https://github.com/KamleshWattamwar/AutoInsight.git
-   cd AutoInsight
-   ```
+2. Install and run the API:
 
-2. **Create `.env`:**
-   ```
-   DATABASE_URL=postgresql://user:password@localhost:5432/autoinsight
-   OPENAI_API_KEY=your_key_here
-   ```
+```powershell
+git clone https://github.com/KamleshWattamwar/AutoInsight.git
+cd AutoInsight/backend
+python -m venv venv
+venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
 
-3. **Start with Docker:**
-   ```bash
-   docker-compose up --build
-   ```
+API docs: http://127.0.0.1:8000/docs
 
-4. **Access:**
-   - Frontend: http://localhost:3000
-   - API Docs: http://localhost:8000/docs
+3. Run the tests (PostgreSQL must be running):
 
----
+```powershell
+python -m pytest
+```
 
-## 📁 Project Structure
+Configuration (see `.env.example`):
+
+| Variable | Used by | Default |
+|----------|---------|---------|
+| `DATABASE_URL` | the app | local `autoinsight` database |
+| `TEST_DATABASE_URL` | the tests | local `autoinsight_test` database |
+
+The URL format is `postgresql+psycopg://user:password@host:5432/dbname`. The test fixture refuses to run unless the database name ends with `_test`, because it drops all tables.
+
+CLI without a server: `python analyze.py file.csv --json out.json`
+
+## API
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/health` | Health check |
+| `POST` | `/datasets/upload` | Upload a CSV (400 bad file, 413 too large) |
+| `GET` | `/datasets` | List datasets, newest first |
+| `POST` | `/datasets/{id}/analyze` | Start analysis, returns 202 and a `report_id` |
+| `GET` | `/datasets/{id}/status` | Status of the latest report |
+| `GET` | `/datasets/{id}/result` | Latest result (409 until it is done) |
+| `GET` | `/reports` | Report history, optional `?dataset_id=` |
+| `GET` | `/reports/{id}` | One report with its result |
+
+Typical flow: upload, analyze, poll `status` until `done`, then fetch `result`.
+
+## Result shape
+
+```
+{
+  "overview":     { rows, columns, duplicate_rows, total_missing_pct, missing, constant_columns, column_types },
+  "columns":      { <column>: { type, stats?, outliers?, unique? } },
+  "correlations": { pairs, matrix, skipped_columns },
+  "findings":     [ { type, severity, columns, message, evidence } ],
+  "quality_score": 0-100,
+  "warnings":     [ ... ]
+}
+```
+
+## Project structure
 
 ```
 AutoInsight/
 ├── backend/
 │   ├── app/
-│   │   ├── api/              # Endpoints: upload, analyze, reports
-│   │   ├── services/         # Profiler, statistics, LLM logic
-│   │   ├── models/           # SQLAlchemy DB models
-│   │   └── core/             # Config, database
-│   ├── requirements.txt
-│   └── tests/
-├── frontend/
-│   ├── src/
-│   │   ├── components/       # UI components
-│   │   ├── pages/            # Upload, Dashboard, History
-│   │   └── services/         # API calls
-│   └── package.json
-├── docker-compose.yml
+│   │   ├── main.py          # routes, background job
+│   │   ├── db.py            # engine, session, get_db
+│   │   ├── models.py        # Dataset, Report
+│   │   └── services/        # loader, profiler, findings, analyzer
+│   ├── tests/
+│   ├── analyze.py           # CLI
+│   └── requirements.txt
+├── frontend/                # not built yet
+├── data/                    # sample CSVs
+├── docs/
 └── .env.example
 ```
 
----
+## Known limitations
 
-## 💡 How It Works (Example)
-
-**Input:** `sales_2026.csv` (10K rows, 15 columns)
-
-**Backend Output (JSON):**
-```json
-{
-  "dataset": { "rows": 10000, "columns": 15 },
-  "missing_values": { "commission": 2.3, "region": 0.1 },
-  "outliers": { "revenue": { "count": 47, "method": "IQR" } },
-  "correlations": [
-    { "columns": ["sales", "experience"], "pearson": 0.82 }
-  ],
-  "insights": [
-    {
-      "type": "high_missingness",
-      "column": "commission",
-      "percentage": 2.3,
-      "severity": "medium"
-    }
-  ]
-}
-```
-
-**LLM Receives (Structured):**  
-→ Generates: *"Commission data is incomplete (2.3%). Consider whether this correlates with contract type or region."*
-
-**React Dashboard Displays:**
-- Overview cards (10K rows, 15 cols, 2.3% nulls)
-- Insight cards with severity badges
-- Charts: correlation heatmap, commission distribution, scatter (sales vs. experience)
-- "Why this matters" explanations
-
----
-
-
-## 📝 API Endpoints (Key Routes)
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `POST` | `/api/datasets/upload` | Upload CSV file |
-| `POST` | `/api/datasets/{id}/analyze` | Run full analysis |
-| `GET` | `/api/reports/{id}` | Fetch report JSON |
-| `GET` | `/api/reports` | List past reports |
-| `POST` | `/api/explore/chart` | Generate chart config |
-
-
-
-## 🧪 Testing
-
-```bash
-# Backend
-cd backend
-pytest tests/
-
-# Frontend
-cd ../frontend
-npm test
-```
-
----
-
+- Analysis runs as a background task inside the server process. Use a single worker.
+- A report left `pending` or `running` by a server crash is not recovered automatically, and it blocks re-analysis of that dataset.
+- Uploaded CSVs are stored on local disk. A deployment needs a persistent disk or object storage.
+- No authentication or rate limiting.
+- Detection thresholds are validated on only a few datasets.

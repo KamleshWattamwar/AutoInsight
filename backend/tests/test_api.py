@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -7,23 +9,30 @@ from app import db, main, models
 
 CSV = b"age,city\n25,Pune\n30,Mumbai\n35,Pune\n40,Delhi\n"
 UNKNOWN_ID = "123e4567-e89b-42d3-a456-426614174000"
+TEST_DB_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://autoinsight:autoinsight@localhost:5432/autoinsight_test",
+)
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
 
-    # Temporary database per test. Patched on the db module, so both
-    # Depends(get_db) and the background task's db.SessionLocal() use it.
-    engine = create_engine(
-        f"sqlite:///{(tmp_path / 'test.db').as_posix()}",
-        connect_args={"check_same_thread": False},
-    )
+    engine = create_engine(TEST_DB_URL, pool_pre_ping=True)
+    # Safety: this fixture drops all tables, so it must never touch the real database.
+    assert engine.url.database.endswith("_test"), "Tests must use a *_test database"
+
     monkeypatch.setattr(db, "engine", engine)
     monkeypatch.setattr(db, "SessionLocal", sessionmaker(bind=engine, autoflush=False))
 
-    with TestClient(main.app) as c:  # "with" runs lifespan, which creates the tables
+    db.Base.metadata.drop_all(engine)  # clean start, even if a past run crashed
+    db.Base.metadata.create_all(engine)
+
+    with TestClient(main.app) as c:
         yield c
+
+    db.Base.metadata.drop_all(engine)
     engine.dispose()
 
 
