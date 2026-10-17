@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from app import main
+from app import db, main, models
 
 CSV = b"age,city\n25,Pune\n30,Mumbai\n35,Pune\n40,Delhi\n"
 UNKNOWN_ID = "123e4567-e89b-42d3-a456-426614174000"
@@ -10,7 +12,19 @@ UNKNOWN_ID = "123e4567-e89b-42d3-a456-426614174000"
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "UPLOAD_DIR", tmp_path)
-    return TestClient(main.app)
+
+    # Temporary database per test. Patched on the db module, so both
+    # Depends(get_db) and the background task's db.SessionLocal() use it.
+    engine = create_engine(
+        f"sqlite:///{(tmp_path / 'test.db').as_posix()}",
+        connect_args={"check_same_thread": False},
+    )
+    monkeypatch.setattr(db, "engine", engine)
+    monkeypatch.setattr(db, "SessionLocal", sessionmaker(bind=engine, autoflush=False))
+
+    with TestClient(main.app) as c:  # "with" runs lifespan, which creates the tables
+        yield c
+    engine.dispose()
 
 
 def upload(client, name="data.csv", content=CSV):
@@ -56,11 +70,14 @@ def test_failed_job(client, monkeypatch):
     client.post(f"/datasets/{dataset_id}/analyze")
 
     status = client.get(f"/datasets/{dataset_id}/status").json()
-    assert status["status"] == "failed" and "boom" in status["error"]
+    assert status["status"] == "failed"
+    assert status["error"] == "Analysis failed"  # generic message, internals not leaked
+
 
 @pytest.mark.parametrize("dataset_id, status", [("not-a-uuid", 400), (UNKNOWN_ID, 404)])
 def test_analyze_errors(client, dataset_id, status):
     assert client.post(f"/datasets/{dataset_id}/analyze").status_code == status
+
 
 def test_cors_allows_frontend_origin(client):
     r = client.get("/health", headers={"Origin": "http://localhost:5173"})
@@ -70,3 +87,63 @@ def test_cors_allows_frontend_origin(client):
 def test_cors_blocks_unknown_origin(client):
     r = client.get("/health", headers={"Origin": "http://evil.example"})
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_upload_too_large(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_UPLOAD_BYTES", 10)
+    r = upload(client)
+    assert r.status_code == 413
+    assert list(main.UPLOAD_DIR.glob("*.csv")) == []  # partial file deleted
+    assert client.get("/datasets").json() == []  # no DB row either
+
+
+def test_analyze_returns_report_id_and_report_is_readable(client):
+    dataset_id = upload(client).json()["dataset_id"]
+    r = client.post(f"/datasets/{dataset_id}/analyze")
+    assert r.status_code == 202
+    report_id = r.json()["report_id"]
+
+    rep = client.get(f"/reports/{report_id}").json()
+    assert rep["status"] == "done"
+    assert rep["dataset_id"] == dataset_id
+    assert "quality_score" in rep["result"]
+
+
+def test_analyze_skips_when_job_active(client):
+    dataset_id = upload(client).json()["dataset_id"]
+    with db.SessionLocal() as s:
+        s.add(models.Report(id=UNKNOWN_ID, dataset_id=dataset_id, status="running"))
+        s.commit()
+
+    r = client.post(f"/datasets/{dataset_id}/analyze")
+    assert r.status_code == 202
+    assert r.json()["report_id"] == UNKNOWN_ID  # existing job returned
+    assert r.json()["status"] == "running"
+    assert len(client.get("/reports").json()) == 1  # no second report created
+
+
+def test_reanalyze_keeps_history(client):
+    dataset_id = upload(client).json()["dataset_id"]
+    first = client.post(f"/datasets/{dataset_id}/analyze").json()["report_id"]
+    second = client.post(f"/datasets/{dataset_id}/analyze").json()["report_id"]
+    assert first != second
+
+    reports = client.get(f"/reports?dataset_id={dataset_id}").json()
+    assert len(reports) == 2
+    assert reports[0]["report_id"] == second  # newest first
+    assert "result" not in reports[0]  # list stays small
+
+
+def test_list_datasets(client):
+    upload(client)
+    items = client.get("/datasets").json()
+    assert len(items) == 1
+    assert items[0]["original_filename"] == "data.csv"
+    assert (items[0]["rows"], items[0]["columns"]) == (4, 2)
+
+
+def test_report_errors(client):
+    assert client.get("/reports/not-a-uuid").status_code == 400
+    assert client.get(f"/reports/{UNKNOWN_ID}").status_code == 404
+    assert client.get("/reports?dataset_id=bad").status_code == 400
+    assert client.get("/datasets?limit=0").status_code == 422
