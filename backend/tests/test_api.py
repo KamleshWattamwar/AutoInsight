@@ -252,3 +252,39 @@ def test_heatmap_after_analysis(client):
     r = chart(client, ds, type="heatmap")
     assert r.status_code == 200
     assert "labels" in r.json() and "values" in r.json()
+
+
+DISCRETE_CSV = ("rating,score\n" + "".join(f"{i % 5 + 1},{i * 1.5}\n" for i in range(30))).encode()
+
+
+def test_chart_options_endpoint(client):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    r = client.get(f"/datasets/{ds}/charts/options")
+    assert r.status_code == 200
+    o = r.json()
+    assert o["columns"]["a"]["charts"] == ["histogram", "boxplot"]
+    assert o["columns"]["city"]["charts"] == ["bar"]
+    assert o["scatter_columns"] == ["a", "b"] and o["heatmap"] is True
+
+
+def test_discrete_numeric_can_be_charted_as_bar(client):
+    ds = upload(client, content=DISCRETE_CSV).json()["dataset_id"]
+    opts = client.get(f"/datasets/{ds}/charts/options").json()["columns"]["rating"]
+    assert opts["discrete"] is True and opts["suggested"] == "bar"
+    assert chart(client, ds, type="bar", columns="rating").status_code == 200
+    assert chart(client, ds, type="bar", columns="score").status_code == 400  # 30 distinct values
+
+
+def test_chart_on_damaged_file_returns_400(client):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    (main.UPLOAD_DIR / f"{ds}.csv").write_bytes(b"")
+    assert chart(client, ds, type="histogram", columns="a").status_code == 400
+
+
+def test_heatmap_uses_latest_finished_report(client):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    client.post(f"/datasets/{ds}/analyze")
+    with db.SessionLocal() as s:
+        s.add(models.Report(id=str(uuid.uuid4()), dataset_id=ds, status="pending"))
+        s.commit()
+    assert chart(client, ds, type="heatmap").status_code == 200

@@ -19,6 +19,8 @@ from app.services.narrative import generate_narrative
 from app.services import charts
 from app.services.loader import infer_types, load_csv
 
+from functools import lru_cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -261,6 +263,17 @@ def list_reports(
         for r in session.scalars(query).all()
     ]
 
+@lru_cache(maxsize=2)  # small on purpose (8 GB laptop). Key includes mtime, so a changed file reloads
+def _typed_frame_cached(path: Path, mtime_ns: int):
+    return infer_types(load_csv(path))  # callers must treat the DataFrame as read-only
+
+
+def _typed_frame(path: Path):
+    try:
+        return _typed_frame_cached(path, path.stat().st_mtime_ns)
+    except ValueError as e:  # damaged file: 400, not 500 (fixes C2)
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.get("/datasets/{dataset_id}/charts")
 def get_chart(
     dataset_id: str,
@@ -273,15 +286,29 @@ def get_chart(
     """Aggregated chart data for one dataset. Never returns raw rows."""
     path = _dataset_path(dataset_id)
 
-    if chart_type == "heatmap":  # read from the stored analysis, no CSV needed
-        report = _latest_report(session, dataset_id)
-        if report is None or report.status != "done":
-            status = report.status if report else "not_started"
-            raise HTTPException(status_code=409, detail=f"Analysis is {status}")
+    if chart_type == "heatmap":  # latest FINISHED report, so a pending re-run does not hide it
+        report = session.scalars(
+            select(models.Report)
+            .where(models.Report.dataset_id == dataset_id, models.Report.status == "done")
+            .order_by(models.Report.created_at.desc())
+            .limit(1)
+        ).first()
+        if report is None:
+            latest = _latest_report(session, dataset_id)
+            raise HTTPException(
+                status_code=409, detail=f"Analysis is {latest.status if latest else 'not_started'}"
+            )
         return charts.heatmap(report.result["correlations"]["matrix"])
 
-    df, types = infer_types(load_csv(path))  # reloaded per request, no cache
+    df, types = _typed_frame(path)
     try:
         return charts.build_chart(df, types, chart_type, columns, bins=bins, top=top)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/datasets/{dataset_id}/charts/options")
+def get_chart_options(dataset_id: str):
+    """Valid charts per column. The UI uses this to build its column and chart pickers."""
+    df, types = _typed_frame(_dataset_path(dataset_id))
+    return charts.chart_options(df, types)

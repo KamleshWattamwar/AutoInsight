@@ -7,6 +7,8 @@ from app.services.profiler import _f
 MAX_BINS = 100
 MAX_TOP = 50
 MAX_POINTS = 2000
+DISCRETE_MAX = 10          # numeric column with at most this many distinct values...
+DISCRETE_MAX_SHARE = 0.2   # ...and at most this share of the rows behaves like a category
 
 # chart type -> for each required column, the allowed column types
 SPEC = {
@@ -15,6 +17,7 @@ SPEC = {
     "bar": (("categorical", "boolean"),),
     "scatter": (("numeric",), ("numeric",)),
 }
+CHART_TYPES = (*SPEC, "heatmap")  # heatmap is served from the stored analysis
 
 
 def _numeric(s: pd.Series) -> pd.Series:
@@ -23,6 +26,14 @@ def _numeric(s: pd.Series) -> pd.Series:
     if x.empty:
         raise ValueError(f"No numeric values in '{s.name}'")
     return x
+
+
+def is_discrete(s: pd.Series) -> bool:
+    """Numeric column with few distinct values (ratings, Age with 4 values)."""
+    x = pd.to_numeric(s, errors="coerce").dropna()
+    x = x[np.isfinite(x)]
+    k = x.nunique()
+    return 0 < k <= DISCRETE_MAX and k <= DISCRETE_MAX_SHARE * len(x)
 
 
 def histogram(s: pd.Series, bins: int = 20) -> dict:
@@ -65,7 +76,10 @@ def boxplot(s: pd.Series) -> dict:
 def top_categories(s: pd.Series, n: int = 10) -> dict:
     if not 1 <= n <= MAX_TOP:
         raise ValueError(f"top must be between 1 and {MAX_TOP}")
-    counts = s.dropna().astype(str).value_counts()
+    s = s.dropna()
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s) and (s % 1 == 0).all():
+        s = s.astype("int64")  # show 25, not 25.0
+    counts = s.astype(str).value_counts()
     if counts.empty:
         raise ValueError(f"No values in '{s.name}'")
     total = int(counts.sum())
@@ -111,11 +125,40 @@ def heatmap(matrix: dict) -> dict:
     }
 
 
+def chart_options(df: pd.DataFrame, types: dict) -> dict:
+    """Which charts are valid per column, so the UI only offers valid choices."""
+    columns, numeric = {}, []
+    for col, t in types.items():
+        discrete = t == "numeric" and is_discrete(df[col])
+        if t == "numeric":
+            numeric.append(col)
+            options = ["bar", "boxplot", "histogram"] if discrete else ["histogram", "boxplot"]
+        elif t in ("categorical", "boolean"):
+            options = ["bar"]
+        else:
+            options = []
+        columns[col] = {
+            "type": t,
+            "discrete": discrete,
+            "charts": options,
+            "suggested": options[0] if options else None,
+        }
+    return {"columns": columns, "scatter_columns": numeric, "heatmap": len(numeric) >= 2}
+
+
+def _fits(s: pd.Series, col_type: str, allowed: tuple, chart_type: str) -> bool:
+    if col_type in allowed:
+        return True
+    return chart_type == "bar" and col_type == "numeric" and is_discrete(s)
+
+
 def build_chart(df: pd.DataFrame, types: dict, chart_type: str, columns: list[str],
                 bins: int = 20, top: int = 10) -> dict:
     """Validate type/columns/column-types, then build. Raises ValueError (API maps it to 400)."""
+    if chart_type == "heatmap":
+        raise ValueError("'heatmap' is built from the stored analysis, use charts.heatmap()")
     if chart_type not in SPEC:
-        raise ValueError(f"Unsupported chart type. Use one of: {', '.join(SPEC)}")
+        raise ValueError(f"Unsupported chart type. Use one of: {', '.join(CHART_TYPES)}")
     need = SPEC[chart_type]
     if len(columns) != len(need):
         raise ValueError(f"'{chart_type}' needs {len(need)} column(s)")
@@ -124,8 +167,9 @@ def build_chart(df: pd.DataFrame, types: dict, chart_type: str, columns: list[st
     for col, ok in zip(columns, need):
         if col not in df.columns:
             raise ValueError(f"Unknown column '{col}'")
-        if types.get(col) not in ok:
-            raise ValueError(f"'{col}' is {types.get(col)}, '{chart_type}' needs {'/'.join(ok)}")
+        if not _fits(df[col], types.get(col), ok, chart_type):
+            hint = " (or a numeric column with few distinct values)" if chart_type == "bar" else ""
+            raise ValueError(f"'{col}' is {types.get(col)}, '{chart_type}' needs {'/'.join(ok)}{hint}")
 
     if chart_type == "histogram":
         return histogram(df[columns[0]], bins)

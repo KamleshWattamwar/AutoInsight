@@ -49,6 +49,7 @@ def test_heatmap_shape():
     ("histogram", ["nope"]),     # unknown column
     ("scatter", ["age"]),        # wrong column count
     ("scatter", ["age", "age"]), # same column twice
+    ("heatmap", ["age"]),        # heatmap is not built here
 ])
 def test_build_chart_rejects_bad_requests(ctype, cols):
     df = pd.DataFrame({"age": [1, 2, 3], "city": ["a", "b", "a"]})
@@ -64,3 +65,34 @@ def test_build_chart_output_is_json_safe():
     for ctype, cols in [("histogram", ["age"]), ("boxplot", ["age"]),
                         ("bar", ["city"]), ("scatter", ["age", "score"])]:
         json.dumps(charts.build_chart(df, types, ctype, cols))
+
+
+def test_is_discrete():
+    assert charts.is_discrete(pd.Series([25, 30, 35, 40] * 10))   # 4 values in 40 rows
+    assert not charts.is_discrete(pd.Series(range(40)))           # 40 distinct values
+    assert not charts.is_discrete(pd.Series([1, 2, 3, 4]))        # 4 values but only 4 rows
+
+
+def test_bar_accepts_discrete_numeric_only():
+    df = pd.DataFrame({"age": [25, 30, 35, 40] * 10, "score": range(40)})
+    types = {"age": "numeric", "score": "numeric"}
+    assert charts.build_chart(df, types, "bar", ["age"])["unique"] == 4
+    with pytest.raises(ValueError):
+        charts.build_chart(df, types, "bar", ["score"])
+
+
+def test_bar_shows_whole_numbers():
+    t = charts.top_categories(pd.Series([25.0, 30.0, 25.0, None, 25.0, 30.0], name="age"))
+    assert t["items"][0]["value"] == "25" and t["n"] == 5
+
+
+def test_chart_options():
+    df = pd.DataFrame({"age": [25, 30, 35, 40] * 10,
+                       "score": [i * 1.5 for i in range(40)],
+                       "city": ["a", "b"] * 20})
+    types = {"age": "numeric", "score": "numeric", "city": "categorical"}
+    o = charts.chart_options(df, types)
+    assert o["columns"]["age"]["suggested"] == "bar"
+    assert o["columns"]["score"]["suggested"] == "histogram"
+    assert o["columns"]["city"]["charts"] == ["bar"]
+    assert o["scatter_columns"] == ["age", "score"] and o["heatmap"] is True
