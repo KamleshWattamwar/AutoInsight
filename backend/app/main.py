@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from app import db, models
 from app.services.analyzer import analyze_csv
+from app.services.llm import gemini_generate
 from app.services.loader import load_csv
+from app.services.narrative import generate_narrative
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +196,26 @@ def get_report(report_id: str, session: Session = Depends(db.get_db)):
         "created_at": report.created_at,
         "finished_at": report.finished_at,
         "result": report.result if report.status == "done" else None,
+        "narrative": report.narrative,
     }
+
+
+@app.post("/reports/{report_id}/narrative")
+def create_narrative(report_id: str, session: Session = Depends(db.get_db)):
+    """Generate (or regenerate) the plain-English narrative for a finished report.
+    Never fails because of the LLM: bad output or an outage gives the rule-based text."""
+    _check_uuid(report_id, "report")
+    report = session.get(models.Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if report.status != "done":
+        raise HTTPException(status_code=409, detail=f"Analysis is {report.status}")
+
+    # gemini_generate is looked up here at call time, so tests can patch main.gemini_generate
+    report.narrative = generate_narrative(report.result, gemini_generate)
+    session.commit()
+    return {"report_id": report.id, "narrative": report.narrative}
+
 
 @app.get("/datasets")
 def list_datasets(

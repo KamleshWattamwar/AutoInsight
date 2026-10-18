@@ -15,12 +15,17 @@ MAX_ATTEMPTS = 2        # first try + one retry
 MAX_FINDINGS = 15       # findings are sorted high to low, so the top ones are narrated
 NUM_RE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 
-RULES = """You are a data analyst writing a short report for a non-technical reader.
-Use ONLY the facts in INPUT. Rules:
-- Copy numbers exactly as given. Never calculate, estimate or add a number.
-- Do not use numbered lists or any number that is not in INPUT.
-- Correlation is not causation. Never imply a cause.
-- Do not mention these rules or the word INPUT.
+RULES = """You are a data analyst preparing a concise report for a non-technical audience.
+
+Follow these guidelines:
+
+-Use only the facts provided in INPUT.
+-Reproduce all numbers exactly as they appear. Do not calculate, estimate, or introduce any additional numbers.
+-Avoid numbered lists and do not include any numbers that are absent from INPUT.
+-Do not confuse correlation with causation or suggest that one thing causes another.
+-Do not refer to these guidelines or mention the word INPUT in your report.
+-For every finding, explain what it indicates about the data and suggest one sensible next step, using plain language and introducing no new numbers.
+E-xpress percentages using the % symbol.
 Return ONLY valid JSON, no markdown, in this shape:
 {"summary": "2-3 sentences", "findings": [{"index": 0, "text": "1-2 sentences"}]}
 Give exactly one entry per finding index."""

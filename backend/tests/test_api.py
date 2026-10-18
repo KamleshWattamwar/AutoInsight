@@ -1,5 +1,6 @@
 import os
-
+import json
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -156,3 +157,48 @@ def test_report_errors(client):
     assert client.get(f"/reports/{UNKNOWN_ID}").status_code == 404
     assert client.get("/reports?dataset_id=bad").status_code == 400
     assert client.get("/datasets?limit=0").status_code == 422
+
+CLEAN = json.dumps({"summary": "The data looks clean.", "findings": []})
+
+
+def analyzed_report_id(client):
+    dataset_id = upload(client).json()["dataset_id"]
+    return dataset_id, client.post(f"/datasets/{dataset_id}/analyze").json()["report_id"]
+
+
+def test_narrative_is_generated_and_stored(client, monkeypatch):
+    _, report_id = analyzed_report_id(client)
+    monkeypatch.setattr(main, "gemini_generate", lambda prompt: CLEAN)
+
+    r = client.post(f"/reports/{report_id}/narrative")
+    assert r.status_code == 200
+    assert r.json()["narrative"]["summary"] == "The data looks clean."
+
+    stored = client.get(f"/reports/{report_id}").json()
+    assert stored["narrative"]["summary"] == "The data looks clean."
+
+
+def test_narrative_falls_back_to_rules_when_llm_fails(client, monkeypatch):
+    _, report_id = analyzed_report_id(client)
+
+    def boom(prompt):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(main, "gemini_generate", boom)
+    r = client.post(f"/reports/{report_id}/narrative")
+    assert r.status_code == 200
+    assert r.json()["narrative"]["source"] == "rules"
+
+
+def test_narrative_before_analysis_is_done_returns_409(client):
+    dataset_id = upload(client).json()["dataset_id"]
+    pending_id = str(uuid.uuid4())
+    with db.SessionLocal() as s:
+        s.add(models.Report(id=pending_id, dataset_id=dataset_id, status="pending"))
+        s.commit()
+    assert client.post(f"/reports/{pending_id}/narrative").status_code == 409
+
+
+def test_narrative_error_codes(client):
+    assert client.post("/reports/not-a-uuid/narrative").status_code == 400
+    assert client.post(f"/reports/{UNKNOWN_ID}/narrative").status_code == 404
