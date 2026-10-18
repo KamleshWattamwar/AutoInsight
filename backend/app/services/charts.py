@@ -119,6 +119,8 @@ def build_chart(df: pd.DataFrame, types: dict, chart_type: str, columns: list[st
     need = SPEC[chart_type]
     if len(columns) != len(need):
         raise ValueError(f"'{chart_type}' needs {len(need)} column(s)")
+    if chart_type == "scatter" and columns[0] == columns[1]:
+        raise ValueError("'scatter' needs two different columns")
     for col, ok in zip(columns, need):
         if col not in df.columns:
             raise ValueError(f"Unknown column '{col}'")

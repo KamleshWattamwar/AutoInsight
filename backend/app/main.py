@@ -16,6 +16,9 @@ from app.services.llm import gemini_generate
 from app.services.loader import load_csv
 from app.services.narrative import generate_narrative
 
+from app.services import charts
+from app.services.loader import infer_types, load_csv
+
 logger = logging.getLogger(__name__)
 
 
@@ -257,3 +260,28 @@ def list_reports(
         }
         for r in session.scalars(query).all()
     ]
+
+@app.get("/datasets/{dataset_id}/charts")
+def get_chart(
+    dataset_id: str,
+    chart_type: str = Query(..., alias="type"),
+    columns: list[str] = Query(default=[]),  # repeat the param: ?columns=a&columns=b
+    bins: int = Query(20, ge=1, le=charts.MAX_BINS),
+    top: int = Query(10, ge=1, le=charts.MAX_TOP),
+    session: Session = Depends(db.get_db),
+):
+    """Aggregated chart data for one dataset. Never returns raw rows."""
+    path = _dataset_path(dataset_id)
+
+    if chart_type == "heatmap":  # read from the stored analysis, no CSV needed
+        report = _latest_report(session, dataset_id)
+        if report is None or report.status != "done":
+            status = report.status if report else "not_started"
+            raise HTTPException(status_code=409, detail=f"Analysis is {status}")
+        return charts.heatmap(report.result["correlations"]["matrix"])
+
+    df, types = infer_types(load_csv(path))  # reloaded per request, no cache
+    try:
+        return charts.build_chart(df, types, chart_type, columns, bins=bins, top=top)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -48,6 +48,7 @@ def test_heatmap_shape():
     ("histogram", ["city"]),     # wrong column type
     ("histogram", ["nope"]),     # unknown column
     ("scatter", ["age"]),        # wrong column count
+    ("scatter", ["age", "age"]), # same column twice
 ])
 def test_build_chart_rejects_bad_requests(ctype, cols):
     df = pd.DataFrame({"age": [1, 2, 3], "city": ["a", "b", "a"]})
@@ -57,8 +58,9 @@ def test_build_chart_rejects_bad_requests(ctype, cols):
 
 
 def test_build_chart_output_is_json_safe():
-    df = pd.DataFrame({"age": [1.0, 2.0, None, 4.0], "city": ["a", "b", "a", None]})
-    types = {"age": "numeric", "city": "categorical"}
+    df = pd.DataFrame({"age": [1.0, 2.0, None, 4.0], "score": [3.0, None, 5.0, 8.0],
+                       "city": ["a", "b", "a", None]})
+    types = {"age": "numeric", "score": "numeric", "city": "categorical"}
     for ctype, cols in [("histogram", ["age"]), ("boxplot", ["age"]),
-                        ("bar", ["city"]), ("scatter", ["age", "age"])]:
+                        ("bar", ["city"]), ("scatter", ["age", "score"])]:
         json.dumps(charts.build_chart(df, types, ctype, cols))

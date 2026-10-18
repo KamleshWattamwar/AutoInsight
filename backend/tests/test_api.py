@@ -202,3 +202,53 @@ def test_narrative_before_analysis_is_done_returns_409(client):
 def test_narrative_error_codes(client):
     assert client.post("/reports/not-a-uuid/narrative").status_code == 400
     assert client.post(f"/reports/{UNKNOWN_ID}/narrative").status_code == 404
+
+CHART_CSV = b"a,b,city\n1,2,x\n2,4,y\n3,5,x\n4,9,y\n"
+
+
+def chart(client, dataset_id, **params):
+    return client.get(f"/datasets/{dataset_id}/charts", params=params)
+
+
+@pytest.mark.parametrize("params,key", [
+    ({"type": "histogram", "columns": "a", "bins": 2}, "bins"),
+    ({"type": "boxplot", "columns": "a"}, "median"),
+    ({"type": "bar", "columns": "city"}, "items"),
+    ({"type": "scatter", "columns": ["a", "b"]}, "points"),
+])
+def test_chart_types_return_data(client, params, key):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    r = chart(client, ds, **params)
+    assert r.status_code == 200
+    assert key in r.json()
+
+
+@pytest.mark.parametrize("params", [
+    {"type": "pie", "columns": "a"},            # unsupported type
+    {"type": "histogram", "columns": "city"},   # wrong column type
+    {"type": "histogram", "columns": "nope"},   # unknown column
+    {"type": "histogram"},                      # no columns
+])
+def test_chart_bad_requests_return_400(client, params):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    assert chart(client, ds, **params).status_code == 400
+
+
+def test_chart_id_errors_and_limits(client):
+    assert chart(client, "not-a-uuid", type="histogram", columns="a").status_code == 400
+    assert chart(client, UNKNOWN_ID, type="histogram", columns="a").status_code == 404
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    assert chart(client, ds, type="histogram", columns="a", bins=101).status_code == 422
+
+
+def test_heatmap_needs_finished_analysis(client):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    assert chart(client, ds, type="heatmap").status_code == 409
+
+
+def test_heatmap_after_analysis(client):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    client.post(f"/datasets/{ds}/analyze")
+    r = chart(client, ds, type="heatmap")
+    assert r.status_code == 200
+    assert "labels" in r.json() and "values" in r.json()
