@@ -10,6 +10,7 @@ BOOL_WORDS = {"true", "false", "yes", "no"}
 
 ID_UNIQUE_RATIO = 0.95
 ID_MIN_ROWS = 20
+ID_STRING_SHARE = 0.90     # share of strings that must look like an id code (no spaces, has a digit)
 
 
 def _numeric_or_identifier(nums: pd.Series) -> str:
@@ -19,6 +20,14 @@ def _numeric_or_identifier(nums: pd.Series) -> str:
     if is_whole and unique_ratio > ID_UNIQUE_RATIO and len(nums) >= ID_MIN_ROWS:
         return "identifier"
     return "numeric"
+
+
+def _looks_like_string_id(as_str: pd.Series) -> bool:
+    """Nearly unique strings without spaces that contain a digit, e.g. EMP0001."""
+    if len(as_str) < ID_MIN_ROWS or as_str.nunique() / len(as_str) <= ID_UNIQUE_RATIO:
+        return False
+    code_like = as_str.str.contains(r"\d") & ~as_str.str.contains(r"\s")
+    return bool(code_like.mean() >= ID_STRING_SHARE)
 
 
 def load_csv(path: str) -> pd.DataFrame:
@@ -54,6 +63,9 @@ def detect_column_type(s: pd.Series) -> str:
         sample = pd.to_datetime(as_str.head(DATE_SAMPLE), errors="coerce", format="mixed")
     if sample.notna().mean() > DATE_THRESHOLD:
         return "datetime"
+
+    if _looks_like_string_id(as_str):
+        return "identifier"
 
     if s.nunique() / len(s) > 0.9 and s.nunique() > 50:
         return "text"

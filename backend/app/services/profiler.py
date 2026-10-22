@@ -2,6 +2,7 @@
 from scipy import stats
 import numpy as np
 import pandas as pd
+
 MAX_CORR_COLS = 30
 
 
@@ -30,6 +31,7 @@ def overview(df: pd.DataFrame, types: dict) -> dict:
         "column_types": types,
     }
 
+
 def numeric_stats(s: pd.Series) -> dict:
     s = s.dropna()
     if s.empty:
@@ -47,6 +49,7 @@ def numeric_stats(s: pd.Series) -> dict:
         "kurtosis": _f(stats.kurtosis(s)) if len(s) > 3 else None,
     }
 
+
 def categorical_stats(s: pd.Series, top: int = 5) -> dict:
     s = s.dropna()
     if s.empty:
@@ -57,6 +60,16 @@ def categorical_stats(s: pd.Series, top: int = 5) -> dict:
         "top": [{"value": str(k), "pct": _f(v * 100, 2)} for k, v in freq.head(top).items()],
         "rare_categories": int((freq < 0.01).sum()),
     }
+
+
+def datetime_stats(s: pd.Series) -> dict:
+    """Earliest date, latest date and the span between them. JSON-safe (ISO strings)."""
+    s = s.dropna()
+    if s.empty or not pd.api.types.is_datetime64_any_dtype(s):
+        return {}
+    lo, hi = s.min(), s.max()
+    return {"min": lo.isoformat(), "max": hi.isoformat(), "span_days": int((hi - lo).days)}
+
 
 def iqr_outliers(s: pd.Series) -> dict:
     s = s.dropna()

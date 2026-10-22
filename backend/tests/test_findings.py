@@ -33,3 +33,12 @@ def test_sorted_by_severity():
     ov = _ov(missing={"a": {"count": 6, "pct": 6.0}, "b": {"count": 40, "pct": 40.0}})
     sev = [f["severity"] for f in detect(ov, {}, NO_CORR)]
     assert sev == ["high", "medium"]
+
+
+def test_small_missing_share_gets_low_severity():
+    low = _ov(missing={"a": {"count": 3, "pct": 2.5}})
+    f = detect(low, {}, NO_CORR)
+    assert [(x["type"], x["severity"]) for x in f] == [("missing_data", "low")]
+
+    tiny = _ov(missing={"a": {"count": 1, "pct": 0.5}})
+    assert detect(tiny, {}, NO_CORR) == []  # below the 1% threshold

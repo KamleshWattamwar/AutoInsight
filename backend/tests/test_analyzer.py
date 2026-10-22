@@ -18,7 +18,7 @@ def _sample():
 
 def test_result_keys():
     res = analyze_df(_sample())
-    assert set(res) == {"overview", "columns", "correlations", "findings", "quality_score","warnings"}
+    assert set(res) == {"overview", "columns", "correlations", "findings", "quality_score", "warnings"}
 
 
 def test_identifier_not_in_correlations():
@@ -29,7 +29,6 @@ def test_identifier_not_in_correlations():
 
 def test_json_safe():
     json.dumps(analyze_df(_sample()))
-
 
 
 def _numeric_df(n_cols):
@@ -49,3 +48,17 @@ def test_no_warning_below_cap():
     res = analyze_df(_numeric_df(5))
     assert res["warnings"] == []
     assert res["correlations"]["skipped_columns"] == []
+
+
+def test_datetime_column_gets_a_summary():
+    df = pd.DataFrame({"d": pd.date_range("2024-01-01", periods=40).astype(str)})
+    res = analyze_df(df)
+    assert res["columns"]["d"]["stats"]["span_days"] == 39
+    json.dumps(res)
+
+
+def test_string_ids_do_not_trigger_high_cardinality():
+    df = pd.DataFrame({"id": [f"EMP{i:04d}" for i in range(100)], "x": range(100)})
+    res = analyze_df(df)
+    assert res["columns"]["id"] == {"type": "identifier"}
+    assert all(f["type"] != "high_cardinality" for f in res["findings"])

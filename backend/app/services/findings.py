@@ -1,7 +1,7 @@
 """Rule-based findings and the data quality score."""
 
 T = {
-    "missing_high": 30, "missing_medium": 5,
+    "missing_high": 30, "missing_medium": 5, "missing_low": 1,
     "corr_moderate": 0.5, "corr_strong": 0.7,
     "skew": 2.0, "outlier_pct": 5.0, "dup_pct": 1.0,
     "dominant_cat_pct": 80.0, "high_cardinality": 50,
@@ -22,6 +22,8 @@ def detect(overview: dict, columns: dict, correlations: dict) -> list:
             sev = "high"
         elif m["pct"] >= T["missing_medium"]:
             sev = "medium"
+        elif m["pct"] >= T["missing_low"]:
+            sev = "low"
         else:
             continue
         out.append(_finding("missing_data", sev, [col],

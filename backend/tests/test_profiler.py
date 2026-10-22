@@ -1,6 +1,6 @@
 import pandas as pd
 from app.services.profiler import (
-    overview, numeric_stats, categorical_stats, iqr_outliers, correlations,
+    overview, numeric_stats, categorical_stats, iqr_outliers, correlations, datetime_stats,
 )
 
 def test_missing_pct():
@@ -84,3 +84,10 @@ def test_correlation_perfect():
 def test_correlation_skips_constant():
     df = pd.DataFrame({"a": range(10), "b": [5] * 10})
     assert correlations(df, ["a", "b"]) == {"pairs": [], "matrix": {}, "skipped_columns": []}
+
+
+# Datetime Tests
+def test_datetime_stats():
+    s = pd.to_datetime(pd.Series(["2024-01-01", "2024-01-31", None]))
+    d = datetime_stats(s)
+    assert d["span_days"] == 30 and d["min"].startswith("2024-01-01")
