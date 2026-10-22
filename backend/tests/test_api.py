@@ -239,6 +239,7 @@ def test_chart_id_errors_and_limits(client):
     assert chart(client, UNKNOWN_ID, type="histogram", columns="a").status_code == 404
     ds = upload(client, content=CHART_CSV).json()["dataset_id"]
     assert chart(client, ds, type="histogram", columns="a", bins=101).status_code == 422
+    assert client.get(f"/datasets/{ds}/charts").status_code == 422  
 
 
 def test_heatmap_needs_finished_analysis(client):
@@ -288,3 +289,23 @@ def test_heatmap_uses_latest_finished_report(client):
         s.add(models.Report(id=str(uuid.uuid4()), dataset_id=ds, status="pending"))
         s.commit()
     assert chart(client, ds, type="heatmap").status_code == 200
+
+
+def test_chart_options_errors(client):
+    assert client.get("/datasets/not-a-uuid/charts/options").status_code == 400
+    assert client.get(f"/datasets/{UNKNOWN_ID}/charts/options").status_code == 404
+
+
+def test_typed_frame_is_cached(client, monkeypatch):
+    ds = upload(client, content=CHART_CSV).json()["dataset_id"]
+    calls = []
+    real = main.load_csv
+
+    def counting(path):
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(main, "load_csv", counting)
+    chart(client, ds, type="histogram", columns="a")
+    chart(client, ds, type="boxplot", columns="a")
+    assert len(calls) == 1  # second request reused the cached DataFrame

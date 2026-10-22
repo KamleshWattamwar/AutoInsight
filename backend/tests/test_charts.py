@@ -5,6 +5,7 @@ import pytest
 
 from app.services import charts
 
+from app.services.profiler import iqr_outliers
 
 def test_histogram_counts_add_up():
     h = charts.histogram(pd.Series(range(100), name="a"), bins=10)
@@ -96,3 +97,20 @@ def test_chart_options():
     assert o["columns"]["score"]["suggested"] == "histogram"
     assert o["columns"]["city"]["charts"] == ["bar"]
     assert o["scatter_columns"] == ["age", "score"] and o["heatmap"] is True
+
+def test_boxplot_outlier_count_matches_engine():
+    s = pd.Series(list(range(50)) + [500, -400], name="v")
+    assert charts.boxplot(s)["outlier_count"] == iqr_outliers(s)["count"]
+
+
+def test_constant_column_charts_do_not_crash():
+    s = pd.Series([5] * 10, name="c")
+    h = charts.histogram(s, bins=4)
+    assert h["n"] == 10 and sum(b["count"] for b in h["bins"]) == 10
+    b = charts.boxplot(s)
+    assert b["outlier_count"] == 0 and b["median"] == 5.0
+
+
+def test_all_missing_column_is_rejected():
+    with pytest.raises(ValueError):
+        charts.histogram(pd.Series([None, None], dtype=float, name="m"))
