@@ -5,3 +5,16 @@ body { margin: 0; font-family: system-ui, sans-serif; background: #f6f7f9; color
 .card h2 { margin: 0 0 12px; font-size: 1.1rem; }
 .muted { color: #6b7280; }
 .error { color: #b42318; }
+
+button { padding: 8px 14px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+button:disabled { background: #9ca3af; cursor: default; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { background: #f6f7f9; border-radius: 6px; padding: 12px; }
+.stat-value { font-size: 1.4rem; font-weight: 600; }
+.warning { color: #92400e; background: #fef3c7; padding: 8px 12px; border-radius: 6px; }
+.finding { display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid #eef0f3; }
+.badge { height: fit-content; padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+.badge.high { background: #fee2e2; color: #b42318; }
+.badge.medium { background: #fef3c7; color: #92400e; }
+.badge.low { background: #e0f2fe; color: #075985; }
+.explain { margin-top: 6px; }
