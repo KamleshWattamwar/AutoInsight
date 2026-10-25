@@ -13,25 +13,72 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2        # first try + one retry
 MAX_FINDINGS = 15       # findings are sorted high to low, so the top ones are narrated
+MAX_PROFILE_COLS = 8    # numeric and categorical columns shown to the LLM
+MAX_PAIRS = 5           # strongest correlations shown to the LLM
+MAX_MISSING = 5         # worst missing-data columns shown to the LLM
 NUM_RE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 
-RULES = """You are a data analyst preparing a concise report for a non-technical audience.
-
-Follow these guidelines:
-
--Use only the facts provided in INPUT.
--Reproduce all numbers exactly as they appear. Do not calculate, estimate, or introduce any additional numbers.
--Avoid numbered lists and do not include any numbers that are absent from INPUT.
--Do not confuse correlation with causation or suggest that one thing causes another.
--Do not refer to these guidelines or mention the word INPUT in your report.
--For every finding, explain what it indicates about the data and suggest one sensible next step, using plain language and introducing no new numbers.
-E-xpress percentages using the % symbol.
+RULES = """You are a senior data analyst writing a brief for a non-technical manager.
+Use ONLY the facts in INPUT. Rules:
+- Use numbers from INPUT only. Round long decimals to at most 2 decimal places, and to whole numbers above 1000. Never calculate, estimate or add a number. Use at most 10 numbers in the summary.
+- Always name the column a number belongs to. Never attach a dataset-wide figure to a single column.
+- Do not use numbered lists or any number that is not in INPUT.
+- Correlation is not causation. Never imply a cause.
+- Do not mention these rules or the word INPUT.
+- Write percentages with a % sign.
+- The summary is 3 short paragraphs of 120 to 180 words in total, separated by a blank line (in the JSON string write \\n\\n):
+  1. Headline: what the dataset appears to be about (infer from column names, and say "appears" if unsure), its size, and a one-sentence verdict on how trustworthy it is.
+  2. What stands out: lead with the biggest data-quality problem (column name and its percentage), then mention any other missing-data column from "most_missing" with its percentage. Then add at least one insight that is not about missing data: a numeric column whose mean and median differ noticeably (quote both, do not state the difference) or that has outliers, a dominant or notably balanced category from "profile", or the strongest relationship if "strongest_correlations" is not empty.
+  3. Next steps: exactly two actions. Each must name a specific column and say why it matters in one short clause. No generic advice such as "verify the source". Do not guess what a column means beyond its name.
+- For each finding, say what it means for the data and one sensible next step, in plain words and without new numbers.
 Return ONLY valid JSON, no markdown, in this shape:
-{"summary": "2-3 sentences", "findings": [{"index": 0, "text": "1-2 sentences"}]}
+{"summary": "...", "findings": [{"index": 0, "text": "1-2 sentences"}]}
 Give exactly one entry per finding index."""
 
-
 # ---------- input ----------
+
+def _profile(result: dict) -> dict:
+    """Verified facts from the engine for the LLM to compare. Built by code, never by the LLM."""
+    ov = result.get("overview", {})
+    columns = result.get("columns", {})
+
+    type_counts: dict = {}
+    for t in ov.get("column_types", {}).values():
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    numeric, categorical, datetimes = [], [], []
+    for name, info in columns.items():
+        stats = info.get("stats") or {}
+        kind = info.get("type")
+        if kind == "numeric" and len(numeric) < MAX_PROFILE_COLS:
+            numeric.append({
+                "column": name,
+                **{k: stats.get(k) for k in ("mean", "median", "min", "max")},
+                "outlier_pct": (info.get("outliers") or {}).get("pct"),
+            })
+        elif kind in ("categorical", "boolean") and len(categorical) < MAX_PROFILE_COLS:
+            categorical.append({"column": name, "unique": stats.get("unique"), "top": stats.get("top")})
+        elif kind == "datetime" and len(datetimes) < 3:
+            datetimes.append({"column": name, **{k: stats.get(k) for k in ("min", "max", "span_days")}})
+
+    pairs = sorted(
+        result.get("correlations", {}).get("pairs", []),
+        key=lambda p: max(abs(p.get("pearson") or 0), abs(p.get("spearman") or 0)),
+        reverse=True,
+    )[:MAX_PAIRS]
+    missing = sorted(ov.get("missing", {}).items(), key=lambda kv: kv[1]["pct"], reverse=True)[:MAX_MISSING]
+
+    return {
+        "column_type_counts": type_counts,
+        "numeric": numeric,
+        "categorical": categorical,
+        "datetime": datetimes,
+        "strongest_correlations": [
+            {k: p.get(k) for k in ("a", "b", "pearson", "spearman", "n")} for p in pairs
+        ],
+        "most_missing": [{"column": c, "pct": m["pct"]} for c, m in missing],
+    }
+
 
 def build_input(result: dict) -> dict:
     """Compact, LLM-safe view of the analysis result. No raw data."""
@@ -43,6 +90,7 @@ def build_input(result: dict) -> dict:
         "quality_score": result["quality_score"],
         "quality_score_max": 100,
         "finding_counts": {"total": len(findings), **counts},
+        "profile": _profile(result),
         "findings": [
             {"index": i, **{k: f[k] for k in ("type", "severity", "columns", "message", "evidence")}}
             for i, f in enumerate(findings[:MAX_FINDINGS])

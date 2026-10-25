@@ -18,3 +18,4 @@ button:disabled { background: #9ca3af; cursor: default; }
 .badge.medium { background: #fef3c7; color: #92400e; }
 .badge.low { background: #e0f2fe; color: #075985; }
 .explain { margin-top: 6px; }
+.summary { white-space: pre-line; line-height: 1.5; }

@@ -2,7 +2,7 @@ import json
 from decimal import Decimal
 
 from app.services import narrative as nar
-
+from app.services.narrative import allowed_numbers, build_input, invalid_numbers
 RESULT = {
     "overview": {"rows": 1000, "columns": 5, "duplicate_rows": 0, "total_missing_pct": 2.5},
     "quality_score": 91,
@@ -98,3 +98,21 @@ def test_llm_exception_falls_back_to_rules():
     out = nar.generate_narrative(RESULT, fake(RuntimeError("provider down")))
     assert out["source"] == "rules"
     assert "1000 rows" in out["summary"]
+
+def test_profile_is_in_input_and_its_numbers_are_allowed():
+    result = {
+        "overview": {"rows": 10, "columns": 2, "duplicate_rows": 0, "total_missing_pct": 0.0,
+                     "missing": {}, "column_types": {"age": "numeric"}},
+        "columns": {"age": {"type": "numeric",
+                            "stats": {"mean": 31.5, "median": 30.0, "min": 20.0, "max": 50.0},
+                            "outliers": {"pct": 0.0}}},
+        "correlations": {"pairs": []},
+        "findings": [],
+        "quality_score": 100,
+    }
+    inp = build_input(result)
+    assert inp["profile"]["numeric"][0]["column"] == "age"
+
+    allowed = allowed_numbers(inp)
+    assert invalid_numbers("The average age is 31.5.", allowed) == []
+    assert invalid_numbers("The average age is 99.", allowed) == ["99"]

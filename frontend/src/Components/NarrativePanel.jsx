@@ -29,7 +29,7 @@ export default function NarrativePanel({ reportId, narrative, onNarrative }) {
       <h2>Plain-English summary</h2>
       {narrative && (
         <>
-          <p>{narrative.summary}</p>
+          <p className="summary">{narrative.summary}</p>
           <p className="muted">{SOURCE_LABEL[narrative.source]}</p>
         </>
       )}
