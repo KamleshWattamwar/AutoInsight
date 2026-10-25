@@ -1,2 +1,7 @@
 body { margin: 0; font-family: system-ui, sans-serif; background: #f6f7f9; color: #1c1f24; }
 .page { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+.card { background: #fff; border: 1px solid #e3e6ea; border-radius: 8px; padding: 16px 20px; margin-top: 16px; }
+.card h2 { margin: 0 0 12px; font-size: 1.1rem; }
+.muted { color: #6b7280; }
+.error { color: #b42318; }
